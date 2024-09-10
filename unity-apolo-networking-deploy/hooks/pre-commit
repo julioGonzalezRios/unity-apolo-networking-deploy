@@ -1,0 +1,70 @@
+#!/bin/bash
+
+# Verifica si Terraform está instalado
+if ! command -v terraform &> /dev/null
+then
+    echo -e "\033[31mTerraform no está instalado. Por favor, instala Terraform e inténtalo de nuevo.\033[0m\n"
+    exit 1
+fi
+
+# Obtiene la lista de archivos de Terraform en espera de commit (en el staging area)
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E "\.tf$|\.tfvars$")
+
+# Verifica si hay archivos de Terraform en espera
+if [[ "$STAGED_FILES" = "" ]]; then
+  # No hay archivos en espera, sale del script
+  echo -e "\033[32mNo hay archivos de Terraform en espera de commit. Saliendo...\033[0m\n"
+  exit 0
+fi
+
+echo -e "Verificando que los archivos se encuentren propiamente formateados...\n"
+
+# Aplica el formato de Terraform a los archivos en espera
+terraform fmt $STAGED_FILES
+if [[ "$?" -ne 0 ]]; then
+    # Falló el formato, sale del script
+    echo -e "\t\033[31mFalló la validación. Por favor, corrija los errores anteriores antes de hacer el commit.\033[0m\n"
+    exit 1
+fi
+
+# Añade los archivos formateados al staging area
+git add $STAGED_FILES
+echo -e "\033[32m...Los archivos de Terraform fueron propiamente formateados.\033[0m\n"
+
+# Obtiene los directorios únicos de nivel superior (sin subdirectorios) de los archivos en espera
+DIRS=$(echo "$STAGED_FILES" | xargs -n 1 dirname | grep -E "^[^/]*$" | sort -u)
+
+# Itera a través de cada directorio
+for DIR in $DIRS; do
+    # Verifica si el directorio .terraform existe, si no, inicializa Terraform
+    if [[ ! -d "$DIR/.terraform" ]]; then
+        # Mensaje de advertencia amarillo antes de ejecutar 'terraform init'
+        echo -e "\033[1;33mTerraform no ha sido inicializado en $DIR. Ejecutando 'terraform init'...\033[0m\n"
+        (cd "$DIR" && terraform init)
+        if [[ "$?" -ne 0 ]]; then
+            # Falló la inicialización, sale del script
+            echo -e "\t\033[31mLa inicialización de Terraform falló en $DIR. Por favor, corrija los errores anteriores antes de hacer el commit.\033[0m\n"
+            exit 1
+        else
+            # Inicialización exitosa
+            echo -e "\n\t\033[32mTerraform ha sido inicializado en $DIR.\033[0m\n"
+        fi
+    fi
+
+    echo -e "Validando los archivos de Terraform en $DIR...\n"
+
+    # Valida los archivos de Terraform en el directorio
+    (cd "$DIR" && terraform validate)
+    if [[ "$?" -ne 0 ]]; then
+        # Falló la validación, sale del script
+        echo -e "\t\033[31mLa validación falló en $DIR. Por favor, corrija los errores anteriores antes de hacer el commit.\033[0m\n"
+        exit 1
+    else
+        # Validación exitosa
+        echo -e "\033[32m....Los archivos de Terraform en $DIR fueron validados exitosamente.\033[0m\n"
+    fi
+done
+
+# Si todo sale bien, continúa con el commit
+echo -e "\033[32mTodas las comprobaciones pasaron. Continuando con el commit...\033[0m\n"
+exit 0
